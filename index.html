@@ -24,6 +24,8 @@ input:focus,textarea:focus{outline:2px solid #9bbce0;border-color:#527ba8}
 button{border:0;border-radius:11px;padding:13px 15px;font-size:15px;font-weight:750;cursor:pointer}
 .primary{background:#101820;color:white}.secondary{background:#e8edf2;color:#15202b}
 .note{font-size:12px;line-height:1.5;color:var(--muted);margin:12px 0 0}
+#pdfResult{padding:12px;border:1px solid #b9c9d8;border-radius:10px;background:#f3f8fc;font-size:14px;line-height:1.5}
+#pdfResult a{display:inline-block;margin-top:8px;padding:12px 14px;border-radius:8px;background:#101820;color:white;font-weight:750;text-decoration:none}
 .receipt{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:24px;max-width:560px;margin:auto;color:#111827}
 .receipt-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;border-bottom:2px solid #111827;padding-bottom:16px}
 .receipt-logo{font-size:25px;letter-spacing:.14em;font-weight:950}
@@ -64,10 +66,11 @@ button{border:0;border-radius:11px;padding:13px 15px;font-size:15px;font-weight:
       <div class="full"><label for="service">SERVICE / DESCRIPTION (optional)</label><input id="service" placeholder="Car wash, polishing, etc."></div>
     </div>
     <div class="actions">
-      <button class="primary" id="printBtn" type="button">Print / Save PDF</button>
+      <button class="primary" id="printBtn" type="button">Create PDF</button>
       <button class="secondary" id="resetBtn" type="button">New receipt</button>
+      <div id="pdfResult" class="full" hidden aria-live="polite"></div>
     </div>
-    <p class="note">Works offline after you save this HTML file on your iPhone. Your entries update the preview automatically. Printing opens the iPhone print sheet; pinch out on the preview if needed, then use Share → Save to Files to save a PDF.</p>
+    <p class="note">Works offline after you save this HTML file on your iPhone. Your entries update the preview automatically. Creates a PDF directly on your iPhone. Use the iOS Share menu to save it to Files or send it by WhatsApp.</p>
   </section>
   <section class="panel preview">
     <h2 class="no-print">Live receipt preview</h2>
@@ -113,7 +116,89 @@ function update(){
   safeText("rService",service);
 }
 fields.forEach(id => $(id).addEventListener("input",update));
-$("printBtn").addEventListener("click",()=>window.print());
+function pdfEscape(text){
+  return String(text ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^\x20-\x7E]/g,"-").replace(/\\/g,"\\\\").replace(/\(/g,"\\(").replace(/\)/g,"\\)");
+}
+function buildReceiptPdf(){
+  const company = pdfEscape($("company").value.trim() || "Velox Wash");
+  const phone = pdfEscape($("phone").value.trim() || "-");
+  const brn = pdfEscape($("brn").value.trim() || "-");
+  const vehicle = pdfEscape(($("vehicle").value || "-").trim().toUpperCase());
+  const amount = "Rs " + (Number.isFinite(Number($("amount").value)) ? Number($("amount").value).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}) : "0.00");
+  const dateRaw = $("date").value;
+  const date = dateRaw ? new Date(dateRaw+"T12:00:00").toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"}) : "-";
+  const service = $("service").value.trim();
+  const commands=[];
+  const text=(x,y,size,value,font="F1")=>commands.push(`BT /${font} ${size} Tf ${x} ${y} Td (${pdfEscape(value)}) Tj ET`);
+  const line=(x1,y1,x2,y2)=>commands.push(`${x1} ${y1} m ${x2} ${y2} l S`);
+  const rect=(x,y,w,h,fill=false)=>commands.push(fill?`q 0.94 0.96 0.98 rg ${x} ${y} ${w} ${h} re f Q`:`${x} ${y} ${w} ${h} re S`);
+  commands.push("0.08 0.11 0.15 RG 1 w");
+  text(38,548,20,company.toUpperCase(),"F2");
+  text(38,531,8,"WASH & DETAILING");
+  text(300,548,9,"PAYMENT");
+  text(300,529,17,"RECEIPT","F2");
+  line(38,514,382,514);
+  text(38,492,10,company,"F2");
+  text(38,477,9,"Contact: " + phone);
+  text(38,463,9,"BRN: " + brn);
+  rect(38,411,344,37,true);
+  text(51,433,9,"AMOUNT PAID","F2");
+  text(248,426,17,amount,"F2");
+  text(38,383,10,"Receipt date");
+  text(230,383,10,date,"F2");
+  line(38,371,382,371);
+  text(38,349,10,"Vehicle number");
+  text(230,349,10,vehicle,"F2");
+  line(38,337,382,337);
+  let y=315;
+  if(service){text(38,y,10,"Service");text(230,y,10,service,"F2");line(38,y-12,382,y-12);y-=34;}
+  text(38,y,10,"Payment status");
+  text(310,y,10,"PAID","F2");
+  line(38,y-12,382,y-12);
+  text(83, y-48, 9, "Thank you for choosing " + company + ".");
+  text(115, y-63, 8, "We appreciate your business.");
+  text(145, y-86, 7, "Computer-generated receipt");
+  const stream=commands.join("\n");
+  const objs=[];
+  objs.push("<< /Type /Catalog /Pages 2 0 R >>");
+  objs.push("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  objs.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 595] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>");
+  objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+  objs.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  let pdf="%PDF-1.4\n%VELOX\n"; const offsets=[0];
+  objs.forEach((obj,i)=>{offsets.push(pdf.length);pdf+=`${i+1} 0 obj\n${obj}\nendobj\n`;});
+  const xref=pdf.length;pdf+=`xref\n0 ${objs.length+1}\n0000000000 65535 f \n`;
+  for(let i=1;i<offsets.length;i++)pdf+=String(offsets[i]).padStart(10,"0")+" 00000 n \n";
+  pdf+=`trailer\n<< /Size ${objs.length+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new Blob([pdf],{type:"application/pdf"});
+}
+let currentPdfUrl = null;
+$("printBtn").addEventListener("click", ()=>{
+  try {
+    const blob = buildReceiptPdf();
+    const stamp = ($("date").value || "receipt").replace(/[^0-9-]/g, "");
+    const vehicle = ($("vehicle").value || "vehicle").trim().replace(/[^a-zA-Z0-9-]/g, "_");
+    const filename = `VELOX-${vehicle}-${stamp}.pdf`;
+    if (currentPdfUrl) URL.revokeObjectURL(currentPdfUrl);
+    currentPdfUrl = URL.createObjectURL(blob);
+    const result = $("pdfResult");
+    result.hidden = false;
+    result.replaceChildren();
+    const message = document.createElement("div");
+    message.textContent = "Your PDF is ready. Tap the button below to open it, then use the iPhone Share button → Save to Files or WhatsApp.";
+    const link = document.createElement("a");
+    link.href = currentPdfUrl;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "Open receipt PDF";
+    link.setAttribute("aria-label", `Open ${filename}`);
+    result.append(message, link);
+    result.scrollIntoView({behavior:"smooth", block:"nearest"});
+  } catch (err) {
+    alert("Could not create the PDF. Please close and reopen the app, then try again. Details: " + (err && err.message ? err.message : "unknown error"));
+  }
+});
 $("resetBtn").addEventListener("click",()=>{
   $("date").value=localDate;$("amount").value="";$("vehicle").value="";
   $("service").value="";update();$("vehicle").focus();
